@@ -1,0 +1,103 @@
+#include <metal_stdlib>
+using namespace metal;
+
+#define PI 3.1415926535
+
+// Linear
+float linEase(float begin, float change, float duration, float time) {
+    return change * time / duration + begin;
+}
+
+// Exponential
+float expEaseInOut(float begin, float change, float duration, float time) {
+    if (time == 0.0) {
+        return begin;
+    }
+    else if (time == duration) {
+        return begin + change;
+    }
+
+    time = time / (duration / 2.0);
+    if (time < 1.0) {
+        return change / 2.0 * pow(2.0, 10.0 * (time - 1.0)) + begin;
+    }
+    return change / 2.0 * (-pow(2.0, -10.0 * (time - 1.0)) + 2.0) + begin;
+}
+
+// Sinusoidal
+float sinEaseInOut(float begin, float change, float duration, float time) {
+    return -change / 2.0 * (cos(PI * time / duration) - 1.0) + begin;
+}
+
+// Rando
+float rand (float2 co) {
+  return fract(sin(dot(co.xy ,float2(12.9898, 78.233))) * 43758.5453);
+}
+
+// Mingle
+float3 crossFade(float3 fromColor, float3 toColor, float dissolve) {
+    return mix(fromColor, toColor, dissolve);
+}
+
+kernel void seeHowTheMainSailSets(texture2d<float, access::write> o[[texture(0)]],
+                                  texture2d<float, access::read> i[[texture(1)]],
+                                  texture2d<float, access::read> j[[texture(2)]],
+                                  constant float &time [[buffer(0)]],
+                                  ushort2 gid [[thread_position_in_grid]]) {
+
+    int width = o.get_width();
+    int height = o.get_height();
+
+    float2 res = float2(width, height);
+    float2 middle = res / 2;
+
+    // Scale up a little so I don't have to get fancy and mirror the image edges
+    float2 p = float2(gid.xy) / 1.1;
+
+    float progress = sin(time) * 0.5 + 0.5;
+
+    // Linearly interpolate the center across the center half of the image
+    float2 center = float2(linEase(middle.x / 2, 0.0, 1.0, progress), middle.y);
+    float dissolve = expEaseInOut(0.0, 1.0, 1.0, progress);
+
+    // A mirrored sinusoidal loop. 0 to 0.8 then back to 0
+    float strength = sinEaseInOut(0.0, 0.8, 0.5, progress);
+
+    float rotations = 3;
+
+    float2 difference = p - middle;
+    float2 dir = normalize(difference);
+    float dist = length(difference);
+
+    float angle = 2.0 * PI * rotations * progress;
+
+    float c = cos(angle);
+    float s = sin(angle);
+
+    float2 rotatedDir = float2(dir.x  * c - dir.y * s, dir.x * s + dir.y * c);
+    float2 rotatoEffect = middle + rotatedDir * dist;
+
+    float3 color = float3(0.0);
+    float total = 0.0;
+
+    float2 toCenter = center - rotatoEffect;
+
+    // slight of hand to fudge the sample number
+    float offset = rand(p);
+
+    for (float t = 0.0; t <= 40.0; t++) {
+        float percent = (t + offset) / 40.0;
+        float weight = 4.0 * (percent - percent * percent);
+
+        float2 pos = p + toCenter * percent * strength;
+
+        float3 fromColor = i.read(ushort2(pos)).rgb;
+        float3 toColor = j.read(ushort2(pos)).rgb;
+
+        color += crossFade(fromColor, toColor, dissolve) * weight;
+        total += weight;
+    }
+
+    float4 result = float4(color / total, 1.0);
+    o.write(result, gid);
+}
